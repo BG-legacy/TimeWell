@@ -5,7 +5,7 @@ from bson import ObjectId
 from datetime import datetime
 from app.core.database import Database, get_database
 from app.schemas.user import UserCreate
-from app.services.user import create_user, get_user_by_email, authenticate_user
+from app.services.user import create_user, get_user_by_email, authenticate_user, get_users, update_user, delete_user
 from app.core.security import verify_password, get_password_hash
 
 @pytest.fixture(scope="module")
@@ -72,6 +72,31 @@ async def test_create_user(test_db, unique_test_user_data):
     assert isinstance(user["updated_at"], datetime)
 
 @pytest.mark.asyncio
+async def test_get_users(test_db, unique_test_user_data):
+    """Test retrieving multiple users."""
+    # Create a test user if needed
+    try:
+        await create_user(unique_test_user_data)
+    except:
+        pass
+    
+    # Get all users
+    users = await get_users()
+    
+    # Check that we got at least one user
+    assert len(users) > 0
+    
+    # Check the structure of the returned users
+    for user in users:
+        assert "email" in user
+        assert "username" in user
+        assert "hashed_password" in user
+        assert "is_active" in user
+        assert "_id" in user
+        assert "created_at" in user
+        assert "updated_at" in user
+
+@pytest.mark.asyncio
 async def test_get_user_by_email(test_db, test_user_data):
     """Test retrieving a user by email."""
     # First make sure we have a user to retrieve
@@ -85,6 +110,49 @@ async def test_get_user_by_email(test_db, test_user_data):
     assert user is not None
     assert user["email"] == test_user_data.email
     assert user["username"] == test_user_data.username
+
+@pytest.mark.asyncio
+async def test_update_user(test_db, unique_test_user_data):
+    """Test updating a user."""
+    # Create a new user for updating
+    user = await create_user(unique_test_user_data)
+    user_id = str(user["_id"])
+    
+    # Update the user
+    new_username = f"updated_{unique_test_user_data.username}"
+    updated_user = await update_user(user_id, {"username": new_username})
+    
+    # Check the updated user
+    assert updated_user is not None
+    assert updated_user["username"] == new_username
+    assert updated_user["email"] == unique_test_user_data.email  # Email should remain unchanged
+    
+    # Verify the update using get_user_by_id
+    user_by_id = await get_user_by_email(unique_test_user_data.email)
+    assert user_by_id["username"] == new_username
+
+@pytest.mark.asyncio
+async def test_delete_user(test_db, unique_test_user_data):
+    """Test deleting a user."""
+    # Create a new user to delete
+    new_test_data = UserCreate(
+        email=f"delete_test_{str(uuid.uuid4())[:8]}@example.com",
+        username=f"deleteuser_{str(uuid.uuid4())[:8]}",
+        password="password123"
+    )
+    user = await create_user(new_test_data)
+    user_id = str(user["_id"])
+    
+    # Delete the user
+    result = await delete_user(user_id)
+    
+    # Check the result
+    assert result["status"] == "success"
+    assert "deleted successfully" in result["message"]
+    
+    # Verify the user is deleted
+    user_by_email = await get_user_by_email(new_test_data.email)
+    assert user_by_email is None
 
 @pytest.mark.asyncio
 async def test_authenticate_user(test_db, test_user_data):
