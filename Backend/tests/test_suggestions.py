@@ -5,7 +5,8 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 from bson import ObjectId
-from app.core.database import get_database
+from fastapi.testclient import TestClient
+from app.core.database import get_database, db
 from app.schemas.user import UserCreate
 from app.schemas.event import EventCreate
 from app.schemas.analysis import SuggestionCreate
@@ -19,13 +20,90 @@ from app.services.suggestion import (
     get_suggestions_by_event_id
 )
 from app.services.ai_analysis import analyze_event_goal_alignment
+from app.models.suggestion import Suggestion
+from app.services.suggestion_service import SuggestionService
+from app.main import app
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @pytest.fixture(scope="module")
 def event_loop():
-    """Create an event loop for the tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     yield loop
     loop.close()
+
+@pytest.fixture(autouse=True)
+async def setup_database():
+    # Connect to the database
+    if db.client is None:
+        db.connect_to_database()
+    
+    # Get database name from environment
+    db_name = os.getenv("MONGODB_DATABASE_NAME", "timewell")
+    
+    # Ensure suggestions collection exists
+    try:
+        await db.client[db_name].create_collection("suggestions")
+    except:
+        # Collection might already exist
+        pass
+    
+    yield
+    
+    # Clean up
+    # Don't close connection, as it may be needed by other tests
+    # db.close_database_connection()
+
+@pytest.fixture
+def suggestion_service():
+    # Ensure database is connected before creating service
+    if db.client is None:
+        db.connect_to_database()
+    
+    return SuggestionService()
+
+@pytest.fixture
+def sample_user_id():
+    return str(ObjectId())
+
+@pytest.fixture
+def sample_event_id():
+    return str(ObjectId())
+
+@pytest.fixture
+def sample_suggestion_data(sample_user_id, sample_event_id):
+    return {
+        "user_id": sample_user_id,
+        "title": "Test Suggestion",
+        "description": "This is a test suggestion",
+        "category": "productivity",
+        "priority": 3,
+        "status": "pending",
+        "tags": ["test", "productivity"],
+        "is_active": True,
+        "ai_prompt": "Generate a productivity suggestion",
+        "ai_response": "Based on analysis, here's a productivity suggestion...",
+        "event_id": sample_event_id,
+        "was_accepted": False
+    }
+
+@pytest.fixture
+def sample_suggestion(sample_suggestion_data):
+    return Suggestion(**sample_suggestion_data)
+
+@pytest.fixture
+def auth_client():
+    # Create a TestClient with a mock authentication token
+    client = TestClient(app)
+    # Mock authentication by adding the Bearer token or bypass auth
+    client.headers["Authorization"] = "Bearer test_token"
+    return client
 
 @pytest.mark.asyncio
 async def test_suggestions_crud():
@@ -227,4 +305,221 @@ async def test_suggestion_saved_from_event_analysis():
         # Restore the original chain
         ai_analysis.chain = original_chain
         
-        db.close_database_connection() 
+        db.close_database_connection()
+
+class TestSuggestionModel:
+    def test_suggestion_creation(self, sample_suggestion_data):
+        suggestion = Suggestion(**sample_suggestion_data)
+        assert suggestion.title == "Test Suggestion"
+        assert suggestion.description == "This is a test suggestion"
+        assert suggestion.category == "productivity"
+        assert suggestion.priority == 3
+        assert suggestion.status == "pending"
+        assert suggestion.tags == ["test", "productivity"]
+        assert suggestion.is_active is True
+        assert suggestion.ai_prompt == "Generate a productivity suggestion"
+        assert suggestion.ai_response == "Based on analysis, here's a productivity suggestion..."
+        assert suggestion.was_accepted is False
+        assert isinstance(suggestion.created_at, datetime)
+        assert isinstance(suggestion.updated_at, datetime)
+
+    def test_suggestion_defaults(self):
+        minimal_data = {
+            "user_id": str(ObjectId()),
+            "title": "Minimal Suggestion",
+            "description": "Minimal test",
+            "category": "test"
+        }
+        suggestion = Suggestion(**minimal_data)
+        assert suggestion.priority == 1
+        assert suggestion.status == "pending"
+        assert suggestion.tags is None
+        assert suggestion.is_active is True
+        assert suggestion.ai_prompt is None
+        assert suggestion.ai_response is None
+        assert suggestion.event_id is None
+        assert suggestion.was_accepted is False
+
+    def test_suggestion_validation(self):
+        with pytest.raises(ValueError):
+            Suggestion(
+                user_id="invalid_id",  # Invalid ObjectId
+                title="Test",
+                description="Test",
+                category="test"
+            )
+
+class TestSuggestionService:
+    @pytest.mark.asyncio
+    @patch('app.services.suggestion_service.db')
+    async def test_get_user_suggestions(self, mock_db, sample_suggestion_data):
+        # Create mock cursor with sort method
+        mock_cursor = AsyncMock()
+        mock_cursor.sort.return_value = mock_cursor  # Make sort return the cursor for chaining
+        
+        # Set up sample document to return
+        sample_suggestion = Suggestion(**sample_suggestion_data)
+        mock_cursor.__aiter__.return_value = [sample_suggestion.model_dump(by_alias=True)]
+        
+        # Create mock collection
+        mock_collection = AsyncMock()
+        mock_collection.find.return_value = mock_cursor
+        
+        # Set up mock database
+        mock_db_instance = MagicMock()
+        mock_db_instance.__getitem__.return_value = mock_collection
+        
+        # Configure db mock
+        mock_db.client = MagicMock()
+        mock_db.client.__getitem__.return_value = mock_db_instance
+        
+        # Create service and replace collection
+        service = SuggestionService()
+        
+        # Call method
+        suggestions = await service.get_user_suggestions(sample_suggestion_data["user_id"])
+        
+        # Verify results
+        assert len(suggestions) == 1
+        assert suggestions[0].title == sample_suggestion_data["title"]
+        assert suggestions[0].description == sample_suggestion_data["description"]
+        
+        # Verify correct methods were called
+        mock_collection.find.assert_called_once()
+        mock_cursor.sort.assert_called_once_with("created_at", -1)
+
+    @pytest.mark.asyncio
+    @patch('app.services.suggestion_service.db')
+    async def test_get_user_suggestions_empty(self, mock_db, sample_user_id):
+        # Create mock cursor with sort method
+        mock_cursor = AsyncMock()
+        mock_cursor.sort.return_value = mock_cursor  # Make sort return the cursor for chaining
+        
+        # Set up empty results
+        mock_cursor.__aiter__.return_value = []
+        
+        # Create mock collection
+        mock_collection = AsyncMock()
+        mock_collection.find.return_value = mock_cursor
+        
+        # Set up mock database
+        mock_db_instance = MagicMock()
+        mock_db_instance.__getitem__.return_value = mock_collection
+        
+        # Configure db mock
+        mock_db.client = MagicMock()
+        mock_db.client.__getitem__.return_value = mock_db_instance
+        
+        # Create service
+        service = SuggestionService()
+        
+        # Call method
+        suggestions = await service.get_user_suggestions(sample_user_id)
+        
+        # Verify results
+        assert len(suggestions) == 0
+        
+        # Verify correct methods were called
+        mock_collection.find.assert_called_once()
+        mock_cursor.sort.assert_called_once_with("created_at", -1)
+
+    @pytest.mark.asyncio
+    @patch('app.services.suggestion_service.db')
+    async def test_get_user_suggestions_inactive(self, mock_db, sample_suggestion_data):
+        # Create mock cursor with sort method
+        mock_cursor = AsyncMock()
+        mock_cursor.sort.return_value = mock_cursor  # Make sort return the cursor for chaining
+        
+        # Set up empty results (inactive suggestion will be filtered out)
+        mock_cursor.__aiter__.return_value = []
+        
+        # Create mock collection
+        mock_collection = AsyncMock()
+        mock_collection.find.return_value = mock_cursor
+        
+        # Set up mock database
+        mock_db_instance = MagicMock()
+        mock_db_instance.__getitem__.return_value = mock_collection
+        
+        # Configure db mock
+        mock_db.client = MagicMock()
+        mock_db.client.__getitem__.return_value = mock_db_instance
+        
+        # Create service
+        service = SuggestionService()
+        
+        # Mark sample data as inactive
+        sample_suggestion_data["is_active"] = False
+        
+        # Call method
+        suggestions = await service.get_user_suggestions(sample_suggestion_data["user_id"])
+        
+        # Verify results
+        assert len(suggestions) == 0
+        
+        # Verify correct query was used (filter includes is_active=True)
+        mock_collection.find.assert_called_once()
+        query_arg = mock_collection.find.call_args[0][0]
+        assert query_arg["is_active"] is True
+        mock_cursor.sort.assert_called_once_with("created_at", -1)
+
+class TestSuggestionRouter:
+    @pytest.mark.asyncio
+    async def test_get_user_suggestions_endpoint(self, auth_client, sample_suggestion_data, suggestion_service):
+        # Insert a test suggestion
+        suggestion = Suggestion(**sample_suggestion_data)
+        await suggestion_service.collection.insert_one(suggestion.model_dump(by_alias=True))
+        
+        # Make request to endpoint
+        response = auth_client.get(f"/suggestions/{sample_suggestion_data['user_id']}")
+        
+        # Verify response
+        assert response.status_code == 200
+        suggestions = response.json()
+        assert len(suggestions) > 0
+        assert suggestions[0]["title"] == sample_suggestion_data["title"]
+        
+        # Clean up
+        await suggestion_service.collection.delete_many({"user_id": ObjectId(sample_suggestion_data["user_id"])})
+
+    @pytest.mark.asyncio
+    async def test_get_user_suggestions_empty_endpoint(self, auth_client, sample_user_id, suggestion_service):
+        # Delete any existing suggestions
+        await suggestion_service.collection.delete_many({"user_id": ObjectId(sample_user_id)})
+        
+        # Make request to endpoint with no suggestions
+        response = auth_client.get(f"/suggestions/{sample_user_id}")
+        
+        # Verify response
+        assert response.status_code == 200
+        suggestions = response.json()
+        assert len(suggestions) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_user_suggestions_invalid_id(self, auth_client):
+        # Make request with invalid user ID
+        with patch("app.routers.suggestion_router.suggestion_service.get_user_suggestions", 
+                  side_effect=Exception("Invalid ObjectId")):
+            response = auth_client.get("/suggestions/invalid_id")
+            
+            # Verify response
+            assert response.status_code == 500
+            assert "Error fetching suggestions" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_user_suggestions_inactive_filter(self, auth_client, sample_suggestion_data, suggestion_service):
+        # Insert an inactive suggestion
+        sample_suggestion_data["is_active"] = False
+        suggestion = Suggestion(**sample_suggestion_data)
+        await suggestion_service.collection.insert_one(suggestion.model_dump(by_alias=True))
+        
+        # Make request to endpoint
+        response = auth_client.get(f"/suggestions/{sample_suggestion_data['user_id']}")
+        
+        # Verify response
+        assert response.status_code == 200
+        suggestions = response.json()
+        assert len(suggestions) == 0  # Inactive suggestions should not be returned
+        
+        # Clean up
+        await suggestion_service.collection.delete_many({"user_id": ObjectId(sample_suggestion_data["user_id"])}) 
