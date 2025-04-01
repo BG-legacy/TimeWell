@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import db
-from app.routers import auth, users, goals, events, suggestions, habits
+from app.routers import auth, users, goals, events, suggestions, habits, coach
 
 app = FastAPI(
     title="TimeWell API",
@@ -25,6 +25,7 @@ app.include_router(goals.router)
 app.include_router(events.router)
 app.include_router(suggestions.router)
 app.include_router(habits.router)
+app.include_router(coach.router)
 
 @app.on_event("startup")
 async def startup_db_client():

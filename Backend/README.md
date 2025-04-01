@@ -171,6 +171,38 @@ The `suggestions` collection stores AI-generated suggestions for event-goal alig
 - `PATCH /suggestions/{suggestion_id}/apply` - Mark a suggestion as applied
 - `PATCH /suggestions/{suggestion_id}/unapply` - Mark a suggestion as not applied
 
+### Coach
+
+- `POST /coach/reflect` - Create a personalized reflection using the user's preferred coach voice
+- `POST /coach/feedback` - Generate personalized feedback using the user's preferred coach voice
+- `POST /coach/encourage` - Generate personalized encouragement using the user's preferred coach voice
+
+## AI-Powered Coaching Features
+
+The TimeWell backend includes several AI-powered coaching features:
+
+### Event Analysis
+The `/events/analyze` endpoint allows users to get AI-powered analysis of their events in relation to their goals. This feature uses LangChain with GPT-4 to analyze how well an event aligns with the user's goals and provides suggestions for improvement.
+
+### Coach Reflections
+The `/coach/reflect` endpoint creates personalized reflections for users based on their data and specified time period. The reflections can be:
+- Weekly reflections
+- Monthly reflections
+- Current status updates
+
+### Personalized Feedback and Encouragement
+The coach provides personalized feedback and encouragement using the user's preferred coaching style:
+
+- `/coach/feedback` - Generates feedback on specific areas with suggestions for improvement
+- `/coach/encourage` - Generates encouraging messages for user achievements
+
+All coach communications are tailored to match the user's preferred coaching style:
+- Motivational: Energetic and encouraging
+- Supportive: Warm and nurturing
+- Direct: Clear and concise
+- Analytical: Fact-based and logical
+- Friendly: Conversational and casual
+
 ## Running the Application
 
 To run the application in development mode:
