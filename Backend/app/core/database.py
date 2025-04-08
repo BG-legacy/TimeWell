@@ -2,7 +2,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Optional
 from dotenv import load_dotenv
 import os
-import ssl
 
 load_dotenv()
 
@@ -12,11 +11,12 @@ class Database:
     def connect_to_database(self, path: str = None):
         MONGODB_URL = path or os.getenv("MONGODB_URL", "mongodb://localhost:27017")
         
-        # Connect with SSL options
+        # Connect with longer timeout
         self.client = AsyncIOMotorClient(
             MONGODB_URL,
-            tlsAllowInvalidCertificates=True,
-            serverSelectionTimeoutMS=5000
+            serverSelectionTimeoutMS=30000,  # Increased timeout to 30 seconds
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000
         )
         
         # Test connection
