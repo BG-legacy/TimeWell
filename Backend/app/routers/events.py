@@ -46,6 +46,15 @@ async def analyze_event(
     
     This endpoint uses AI to analyze how well an event aligns with the user's goals
     and provides suggestions for improvement.
+    
+    You can specify a voice style to customize the tone of the analysis:
+    - cool_cousin: Young, hip mentor who keeps it real
+    - og_big_bro: Experienced, protective guide with street wisdom
+    - oracle: Wise, spiritual advisor connected to ancestral knowledge
+    - motivator: Energetic, passionate coach focused on empowerment
+    - wise_elder: Patient, nuanced mentor with deep historical perspective
+    
+    The system will provide a fallback response if the AI service is unavailable.
     """
     # Get the event details to verify ownership
     event = await event_service.get_event_by_id(request.event_id)
@@ -62,11 +71,19 @@ async def analyze_event(
             detail="Not authorized to analyze this event"
         )
     
-    # Perform the analysis
+    # Perform the analysis with the specified voice style
     analysis_result = await analyze_event_goal_alignment(
         str(current_user["_id"]), 
-        request.event_id
+        request.event_id,
+        request.voice_style,
+        use_fallback_on_error=True  # Always use fallback if AI fails
     )
+    
+    # Check if this is a fallback response and add a header if it is
+    if "fallback" in analysis_result and analysis_result["fallback"]:
+        # In a real FastAPI response, we'd set a header here
+        # This is handled on the frontend
+        pass
     
     return analysis_result
 

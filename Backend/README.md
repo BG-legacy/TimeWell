@@ -161,7 +161,7 @@ The `suggestions` collection stores AI-generated suggestions for event-goal alig
 - `GET /events/{event_id}` - Get event by ID
 - `PATCH /events/{event_id}` - Update event
 - `DELETE /events/{event_id}` - Delete event
-- `POST /events/analyze` - Analyze event alignment with goals using GPT-4
+- `POST /events/analyze` - Analyze event alignment with goals using GPT-4 (accepts voice_style parameter)
 
 ### Suggestions
 
@@ -176,6 +176,13 @@ The `suggestions` collection stores AI-generated suggestions for event-goal alig
 - `POST /coach/reflect` - Create a personalized reflection using the user's preferred coach voice
 - `POST /coach/feedback` - Generate personalized feedback using the user's preferred coach voice
 - `POST /coach/encourage` - Generate personalized encouragement using the user's preferred coach voice
+- `POST /coach/ask` - Ask the TimeWell coach a question with specified voice style
+- `GET /coach/weekly-review` - Get a personalized weekly review with specified voice style
+- `POST /coach/action-plan` - Generate an action plan with specified voice style
+
+### Voice Styles
+
+- `GET /voice-styles` - Get a list of all available voice styles for AI interactions
 
 ## AI-Powered Coaching Features
 
@@ -183,6 +190,64 @@ The TimeWell backend includes several AI-powered coaching features:
 
 ### Event Analysis
 The `/events/analyze` endpoint allows users to get AI-powered analysis of their events in relation to their goals. This feature uses LangChain with GPT-4 to analyze how well an event aligns with the user's goals and provides suggestions for improvement.
+
+### Culturally Relevant Voice Styles
+
+TimeWell provides AI coaching with culturally relevant voice styles specifically designed for the African American community:
+
+- `cool_cousin`: Young, hip mentor who keeps it real with contemporary language, using African American cultural references and modern slang appropriately.
+- `og_big_bro`: Experienced, protective guide with street wisdom who balances tough love with deep encouragement, using occasional AAVE naturally.
+- `oracle`: Wise, spiritual advisor connected to ancestral knowledge, drawing on African and African American spiritual traditions.
+- `motivator`: Energetic, passionate coach focused on empowerment, channeling the energy of motivational speakers in Black churches and communities.
+- `wise_elder`: Patient, nuanced mentor with deep historical perspective who provides context from historical struggles and achievements of Black Americans.
+
+### Voice Style Integration
+
+The voice styles are integrated throughout the TimeWell system:
+
+- `GET /voice-styles` - Get a list of all available voice styles
+- All AI-powered coaching responses can be customized with a voice style parameter
+
+### LangChain Implementation
+
+TimeWell uses LangChain for structured AI interactions using a flexible chain factory pattern:
+
+- **ChainFactory Service**: Centralizes chain creation logic with support for different models and voice styles
+- **PromptTemplateManager**: Manages culturally relevant prompt templates for different voice styles
+- **Structured Output Parsing**: Uses LangChain's output parsers to ensure consistent response formats
+
+Example:
+```python
+# Creating a chain with a specific voice style and output parser
+chain_config = chain_factory.create_parser_chain(
+    human_template="Answer this question: {question}",
+    response_schemas=response_schemas,
+    voice_style="cool_cousin"
+)
+```
+
+### Direct OpenAI API Integration
+
+For specific use cases, TimeWell also offers direct OpenAI API integration through the CoachService:
+
+- `POST /coach/ask` - Ask the coach a direct question with specified voice style
+- `GET /coach/weekly-review` - Get a personalized weekly review with specified voice style
+- `POST /coach/action-plan` - Generate an action plan with specified voice style using structured JSON output
+
+### Culturally Relevant Fallback Messages
+
+TimeWell includes a robust fallback message system to ensure the application remains functional even when AI services are unavailable:
+
+- **Voice-Style Consistency**: Fallback messages maintain the same culturally relevant voice styles as the AI responses
+- **Context-Aware Fallbacks**: Different types of fallback messages for different use cases (analysis, suggestions, weekly reviews, etc.)
+- **Automatic Recovery**: Services automatically switch to fallback messages when AI calls fail
+- **Transparency**: Responses include a `fallback` flag so the frontend can indicate when a fallback was used
+
+Example of a fallback message from the "Oracle" voice style:
+```
+Though the analysis is veiled from me now, I feel the intentionality in your actions.
+Listen to the wisdom that already resides within you.
+```
 
 ### Coach Reflections
 The `/coach/reflect` endpoint creates personalized reflections for users based on their data and specified time period. The reflections can be:
