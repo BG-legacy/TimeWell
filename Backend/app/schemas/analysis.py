@@ -4,6 +4,7 @@ from datetime import datetime
 
 class AlignmentRequest(BaseModel):
     event_id: str = Field(..., description="The ID of the event to analyze")
+    voice_style: Optional[str] = Field(default="cool_cousin", description="The voice style to use for analysis (cool_cousin, og_big_bro, oracle, motivator, wise_elder)")
 
 class AlignedGoal(BaseModel):
     id: str = Field(..., description="The ID of the aligned goal")
@@ -32,4 +33,5 @@ class SuggestionCreate(BaseModel):
     suggestion: str = Field(..., description="Suggestion to improve alignment")
     new_goal_suggestion: Optional[str] = Field(None, description="Suggestion for a new goal if no alignment found")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="When this suggestion was created")
-    is_applied: bool = Field(default=False, description="Whether this suggestion has been applied by the user") 
+    is_applied: bool = Field(default=False, description="Whether this suggestion has been applied by the user")
+    voice_style: Optional[str] = Field(default="cool_cousin", description="The voice style used to generate this suggestion") 
