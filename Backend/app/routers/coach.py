@@ -7,10 +7,22 @@ from app.schemas.preference import CoachVoice
 from app.core.security import get_current_active_user
 import uuid
 import os
+import logging
 from dotenv import load_dotenv
 from bson import ObjectId
+from app.core.auth import get_current_user
+from app.services.coach_service import coach_service
+from app.services.event import get_events_by_user_id
+from app.services.goal import get_goals_by_user_id
+from app.services.prompt_templates import VoiceStyle
+from app.schemas.analysis import AnalysisResponse
+from pydantic import BaseModel, Field
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Get database name from environment
 DATABASE_NAME = os.getenv("MONGODB_DATABASE_NAME", "timewell")
@@ -20,6 +32,28 @@ router = APIRouter(
     tags=["coach"],
     responses={404: {"description": "Not found"}},
 )
+
+class CoachingRequest(BaseModel):
+    prompt: str = Field(..., description="The user's prompt or question")
+    voice_style: Optional[str] = Field(default="cool_cousin", description="The voice style to use for the response")
+    model: Optional[str] = Field(default="gpt-4", description="The model to use")
+
+class CoachingResponse(BaseModel):
+    text: str = Field(..., description="The coaching response text")
+    voice_style: str = Field(..., description="The voice style used")
+    model: str = Field(..., description="The model used")
+    token_usage: Optional[int] = Field(None, description="Token usage for the request")
+    error: Optional[bool] = Field(None, description="Whether there was an error")
+    message: Optional[str] = Field(None, description="Error message if applicable")
+
+class ActionPlan(BaseModel):
+    actions: List[str] = Field(..., description="List of recommended actions")
+    priorities: List[str] = Field(..., description="List of priority areas to focus on")
+    insights: List[str] = Field(..., description="List of insights from the user's data")
+
+class ActionPlanRequest(BaseModel):
+    timeframe: str = Field(default="week", description="Timeframe for the action plan (day, week, month)")
+    voice_style: Optional[str] = Field(default="motivator", description="The voice style to use for the response")
 
 
 def generate_voice_specific_content(coach_voice: CoachVoice, content_type: str, data: Dict[str, Any]) -> str:
@@ -292,4 +326,205 @@ async def create_reflection(
         highlights=reflection["highlights"],
         suggestions=reflection["suggestions"],
         created_at=reflection["created_at"]
-    ) 
+    )
+
+@router.post("/ask", response_model=CoachingResponse)
+async def ask_coach(
+    request: CoachingRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Ask the TimeWell coach a question and get a response.
+    
+    This endpoint uses direct OpenAI API calls to provide coaching advice
+    using the specified voice style.
+    
+    The system will provide a fallback response if the AI service is unavailable.
+    """
+    response = await coach_service.get_coaching_message(
+        user_prompt=request.prompt,
+        voice_style=request.voice_style,
+        model=request.model,
+        use_fallback_on_error=True  # Always use fallback if AI fails
+    )
+    
+    if "error" in response and response["error"]:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=response["message"]
+        )
+    
+    # Check if this is a fallback response and add a header if it is
+    if "fallback" in response and response["fallback"]:
+        # In a real FastAPI response, we'd set a header here
+        # This is handled on the frontend
+        pass
+        
+    return response
+
+@router.get("/weekly-review", response_model=CoachingResponse)
+async def get_weekly_review(
+    voice_style: Optional[str] = "wise_elder",
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate a weekly review of the user's progress.
+    
+    This endpoint gathers the user's events and goals from the past week
+    and provides a personalized review and recommendations.
+    
+    The system will provide a fallback response if the AI service is unavailable.
+    """
+    try:
+        # Calculate the date range for the past week
+        today = datetime.utcnow()
+        week_ago = today - timedelta(days=7)
+        
+        # Get the user's events from the past week
+        events = await get_events_by_user_id(str(current_user["_id"]))
+        recent_events = [e for e in events if e.get("start_time") and e.get("start_time") >= week_ago]
+        
+        # Get the user's active goals
+        goals = await get_goals_by_user_id(str(current_user["_id"]))
+        active_goals = [g for g in goals if not g.get("is_completed", False)]
+        
+        # Prepare the user data
+        user_data = {
+            "events": recent_events,
+            "goals": active_goals,
+            "user_name": current_user.get("username", "User")
+        }
+        
+        # Generate the weekly review
+        response = await coach_service.weekly_review(
+            user_data=user_data,
+            voice_style=voice_style,
+            use_fallback_on_error=True  # Always use fallback if AI fails
+        )
+        
+        if "error" in response and response["error"]:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=response["message"]
+            )
+        
+        # Check if this is a fallback response and add a header if it is
+        if "fallback" in response and response["fallback"]:
+            # In a real FastAPI response, we'd set a header here
+            # This is handled on the frontend
+            pass
+            
+        return response
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating weekly review: {str(e)}"
+        )
+
+@router.post("/action-plan", response_model=ActionPlan)
+async def get_action_plan(
+    request: ActionPlanRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate an action plan for the user based on their goals and events.
+    
+    This endpoint uses the structured JSON response format from OpenAI
+    to create a well-structured action plan.
+    
+    The system will provide a fallback response if the AI service is unavailable.
+    """
+    try:
+        # Define the timeframe based on the request
+        if request.timeframe == "day":
+            days_ago = 1
+        elif request.timeframe == "month":
+            days_ago = 30
+        else:  # default to week
+            days_ago = 7
+            
+        # Calculate the date range
+        today = datetime.utcnow()
+        start_date = today - timedelta(days=days_ago)
+        
+        # Get the user's events
+        events = await get_events_by_user_id(str(current_user["_id"]))
+        recent_events = [e for e in events if e.get("start_time") and e.get("start_time") >= start_date]
+        
+        # Get the user's goals
+        goals = await get_goals_by_user_id(str(current_user["_id"]))
+        
+        # Prepare events and goals summaries
+        events_summary = "\n".join([f"- {e['title']}: {e['description']}" for e in recent_events])
+        goals_summary = "\n".join([f"- {g['title']}: {g['description']}" for g in goals])
+        
+        # Create the prompt
+        prompt = f"""
+        Please analyze this user's recent activities and goals, and create an action plan.
+        
+        RECENT EVENTS ({request.timeframe}):
+        {events_summary if events_summary else "No events recorded recently."}
+        
+        GOALS:
+        {goals_summary if goals_summary else "No goals defined."}
+        
+        Based on this information, provide:
+        1. A list of recommended actions to take
+        2. Priority areas to focus on
+        3. Insights from the data
+        """
+        
+        # Define the response schema for structured output
+        response_schema = {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of 3-5 recommended actions based on goals and activities"
+                },
+                "priorities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of 2-3 priority areas to focus on"
+                },
+                "insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of 2-3 insights from the data"
+                }
+            },
+            "required": ["actions", "priorities", "insights"]
+        }
+        
+        # Use the structured coach context manager
+        async with coach_service.structured_coach(
+            voice_style=request.voice_style,
+            use_fallback_on_error=True  # Always use fallback if AI fails
+        ) as coach:
+            result = await coach(prompt, response_schema)
+            
+            if "error" in result and result["error"]:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=result["message"]
+                )
+            
+            # Check if this is a fallback response and add a header if it is
+            if "fallback" in result and result["fallback"]:
+                # In a real FastAPI response, we'd set a header here
+                # This is handled on the frontend
+                pass
+                
+            return result["data"]
+            
+    except Exception as e:
+        # If all else fails (including fallback mechanism), return a simple fallback
+        from app.services.fallback_messages import fallback_service
+        
+        # Log the error
+        logger.error(f"Critical error generating action plan, using emergency fallback: {str(e)}")
+        
+        # Return emergency fallback
+        return fallback_service.get_fallback_action_plan(request.voice_style) 
